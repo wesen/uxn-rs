@@ -109,6 +109,7 @@ impl Stack {
 
 struct Uxn {
     ram: [u8; 65536],
+    pc: u16,
     wst: Stack,
     rst: Stack,
     devices: [Box<dyn Device>; 16],
@@ -149,8 +150,11 @@ impl Uxn {
         self.wst.ptr = 0;
         self.rst.ptr = 0;
         self.ram.iter_mut().for_each(|x| *x = 0);
+        self.pc = 0;
         self.is_halted = false;
     }
+
+    #[inline(always)]
     pub fn peek(&mut self, addr: usize, is_short: bool) -> ExecutionResult<u16> {
         if is_short {
             Ok((self.ram[addr] as u16) << 8 | self.ram[addr + 1] as u16)
@@ -159,7 +163,13 @@ impl Uxn {
         }
     }
 
-    pub fn pop8(&mut self, s: &mut Stack) -> ExecutionResult<u16> {
+    #[inline(always)]
+    pub fn pop8(&mut self, use_working_stack: bool) -> ExecutionResult<u16> {
+        let mut s = if use_working_stack {
+            &mut self.wst
+        } else {
+            &mut self.rst
+        };
         if s.ptr == 0 {
             return Err("Stack underflow");
         }
@@ -168,22 +178,36 @@ impl Uxn {
         Ok(value as u16)
     }
 
-    pub fn pop16(&mut self, s: &mut Stack) -> ExecutionResult<u16> {
+    #[inline(always)]
+    pub fn pop16(&mut self, use_working_stack: bool) -> ExecutionResult<u16> {
+        let mut s = if use_working_stack {
+            &mut self.wst
+        } else {
+            &mut self.rst
+        };
         if s.ptr <= 1 {
             return Err("Stack underflow");
         }
         s.ptr -= 2;
         Ok((s.data[s.ptr as usize] as u16) << 8 | s.data[s.ptr as usize + 1] as u16)
     }
-    pub fn pop(&mut self, s: &mut Stack, is_short: bool) -> ExecutionResult<u16> {
+
+    #[inline(always)]
+    pub fn pop(&mut self, use_working_stack: bool, is_short: bool) -> ExecutionResult<u16> {
         if is_short {
-            self.pop8(s)
+            self.pop8(use_working_stack)
         } else {
-            self.pop16(s)
+            self.pop16(use_working_stack)
         }
     }
 
-    pub fn push8(&mut self, v: u16, s: &mut Stack) -> ExecutionResult<()> {
+    #[inline(always)]
+    pub fn push8(&mut self, v: u16, use_working_stack: bool) -> ExecutionResult<()> {
+        let mut s = if use_working_stack {
+            &mut self.wst
+        } else {
+            &mut self.rst
+        };
         if s.ptr >= 255 {
             return Err("Stack overflow");
         }
@@ -191,7 +215,13 @@ impl Uxn {
         s.ptr += 1;
         Ok(())
     }
-    pub fn push16(&mut self, v: u16, s: &mut Stack) -> ExecutionResult<()> {
+    #[inline(always)]
+    pub fn push16(&mut self, v: u16, use_working_stack: bool) -> ExecutionResult<()> {
+        let mut s = if use_working_stack {
+            &mut self.wst
+        } else {
+            &mut self.rst
+        };
         if s.ptr >= 254 {
             return Err("Stack overflow");
         }
@@ -200,24 +230,27 @@ impl Uxn {
         s.ptr += 2;
         Ok(())
     }
-    pub fn push(&mut self, v: u16, is_short: bool) -> ExecutionResult<()> {
+    #[inline(always)]
+    pub fn push(&mut self, v: u16, use_working_stack: bool, is_short: bool) -> ExecutionResult<()> {
         if is_short {
-            self.push8(v, ss)
+            self.push8(v, use_working_stack)
         } else {
-            self.push16(v, ss)
+            self.push16(v, use_working_stack)
         }
     }
 
-    pub fn warp(&mut self, addr: u16) -> ExecutionResult<()> {
+    #[inline(always)]
+    pub fn warp(&mut self, addr: u16, is_short: bool) -> ExecutionResult<()> {
         if is_short {
-            pc = addr;
+            self.pc = addr;
         } else {
-            pc += addr;
+            self.pc += addr;
         }
         Ok(())
     }
 
-    pub fn poke(&mut self, addr: usize, value: u16) -> ExecutionResult<()> {
+    #[inline(always)]
+    pub fn poke(&mut self, addr: usize, value: u16, is_short: bool) -> ExecutionResult<()> {
         if is_short {
             self.ram[addr] = (value >> 8) as u8;
             self.ram[addr + 1] = (value & 0xff) as u8;
@@ -227,141 +260,136 @@ impl Uxn {
         Ok(())
     }
 
-
     pub fn eval(&mut self, startAddr: InstructionPointer) -> Result<(), &str> {
-        let mut pc = startAddr;
+        self.pc = startAddr;
 
-        if pc == 0x0 || self.is_halted {
+        if self.pc == 0x0 || self.is_halted {
+
             return Ok(());
         }
 
         // TODO make sure we are not running too long
 
-        let opcode = self.ram[pc as usize];
+        let opcode = self.ram[self.pc as usize];
         let mode: InstructionMode = opcode.into();
         let is_return = mode.contains(InstructionMode::Return);
         let is_keep = mode.contains(InstructionMode::Keep);
         let is_short = mode.contains(InstructionMode::Short);
 
-        let (ss, ds) = if is_return {
-            (&mut self.rst, &mut self.wst)
-        } else {
-            (&mut self.wst, &mut self.rst)
-        };
-
         let res: Result<(), &str> = match (opcode & 0x1f).into() {
             Opcode::LIT => {
-                self.peek(pc as usize, is_short).and_then(|a|
-                    self.push(a, is_short)).into()
+                self.peek(self.pc as usize, is_short).and_then(|a|
+                    self.push(a, !is_return, is_short)).into()
             }
             Opcode::INC => {
-                self.pop(ss, is_short).and_then(|a|
-                    self.push(a + 1, is_short)).into()
+                self.pop(!is_return, is_short).and_then(|a|
+                    self.push(a + 1, !is_return, is_short)).into()
             }
             Opcode::POP => {
-                self.pop(ss, is_short).and_then(|_| Ok(()))
+                self.pop(!is_return, is_short).and_then(|_| Ok(()))
             }
             Opcode::NIP => {
-                self.pop(ss, is_short).and_then(|a|
-                    self.pop(ss, is_short).and_then(|_|
-                        self.push(a, is_short))).into()
+                self.pop(!is_return, is_short).and_then(|a|
+                    self.pop(!is_return, is_short).and_then(|_|
+                        self.push(a, !is_return, is_short))).into()
             }
             Opcode::SWP => {
-                self.pop(ss, is_short).and_then(|a|
-                    self.pop(ss, is_short).and_then(|b|
-                        self.push(a, is_short).and_then(|_|
-                            self.push(b, is_short)))).into()
+                self.pop(!is_return, is_short).and_then(|a|
+                    self.pop(!is_return, is_short).and_then(|b|
+                        self.push(a, !is_return, is_short).and_then(|_|
+                            self.push(b, !is_return, is_short)))).into()
             }
             Opcode::ROT => {
-                self.pop(ss, is_short).and_then(|a|
-                    self.pop(ss, is_short).and_then(|b|
-                        self.pop(ss, is_short).and_then(|c|
-                            self.push(b, is_short).and_then(|_|
-                                self.push(a, is_short)).and_then(|_|
-                                self.push(c, is_short))))).into()
+                let x = !is_return;
+                self.pop(x, is_short).and_then(|a|
+                    self.pop(x, is_short).and_then(|b|
+                        self.pop(x, is_short).and_then(|c|
+                            self.push(b, x, is_short).and_then(|_|
+                                self.push(a, x, is_short)).and_then(|_|
+                                self.push(c, x, is_short))))).into()
             }
             Opcode::DUP => {
-                self.pop(ss, is_short).and_then(|a|
-                    self.push(a, is_short).and_then(|_|
-                        self.push(a, is_short))).into()
+                self.pop(!is_return, is_short).and_then(|a|
+                    self.push(a, !is_return, is_short).and_then(|_|
+                        self.push(a, !is_return, is_short))).into()
             }
             Opcode::OVR => {
-                self.pop(ss, is_short).and_then(|a|
-                    self.pop(ss, is_short).and_then(|b|
-                        self.push(b, is_short).and_then(|_|
-                            self.push(a, is_short).and_then(|_|
-                                self.push(b, is_short))))).into()
+                self.pop(!is_return, is_short).and_then(|a|
+                    self.pop(!is_return, is_short).and_then(|b|
+                        self.push(b, !is_return, is_short).and_then(|_|
+                            self.push(a, !is_return, is_short).and_then(|_|
+                                self.push(b, !is_return, is_short))))).into()
             }
             Opcode::EQU => {
-                self.pop(ss, is_short).and_then(|a|
-                    self.pop(ss, is_short).and_then(|b|
-                        self.push8(if a == b { 1 } else { 0 }, ss))).into()
+                self.pop(!is_return, is_short).and_then(|a|
+                    self.pop(!is_return, is_short).and_then(|b|
+                        self.push8(if a == b { 1 } else { 0 }, !is_return))).into()
             }
             Opcode::NEQ => {
-                self.pop(ss, is_short).and_then(|a|
-                    self.pop(ss, is_short).and_then(|b|
-                        self.push8(if a != b { 1 } else { 0 }, ss))).into()
+                self.pop(!is_return, is_short).and_then(|a|
+                    self.pop(!is_return, is_short).and_then(|b|
+                        self.push8(if a != b { 1 } else { 0 }, !is_return))).into()
             }
             Opcode::GTH => {
-                self.pop(ss, is_short).and_then(|a|
-                    self.pop(ss, is_short).and_then(|b|
-                        self.push8(if b > a { 1 } else { 0 }, ss))).into()
+                self.pop(!is_return, is_short).and_then(|a|
+                    self.pop(!is_return, is_short).and_then(|b|
+                        self.push8(if b > a { 1 } else { 0 }, !is_return))).into()
             }
             Opcode::LTH => {
-                self.pop(ss, is_short).and_then(|a|
-                    self.pop(ss, is_short).and_then(|b|
-                        self.push8(if b < a { 1 } else { 0 }, ss))).into()
+                self.pop(!is_return, is_short).and_then(|a|
+                    self.pop(!is_return, is_short).and_then(|b|
+                        self.push8(if b < a { 1 } else { 0 }, !is_return))).into()
             }
             Opcode::JMP => {
-                self.pop(ss, is_short).and_then(|a|
-                    self.warp(a)).into()
+                self.pop(!is_return, is_short).and_then(|a|
+                    self.warp(a, is_short)).into()
             }
             Opcode::JCN => {
-                self.pop(ss, is_short).and_then(|a|
-                    self.pop8(ss).and_then(|b|
-                        if b != 0 { self.warp(a) } else { Ok(()) })).into()
+                self.pop(!is_return, is_short).and_then(|a|
+                    self.pop8(!is_return).and_then(|b|
+                        if b != 0 { self.warp(a, is_short) } else { Ok(()) })).into()
             }
             Opcode::JSR => {
-                self.pop(ss, is_short).and_then(|a|
-                    self.push8(pc, ds).and_then(|_|
-                        self.warp(a))).into()
+                self.pop(!is_return, is_short).and_then(|a|
+                    self.push8(self.pc, is_return).and_then(|_|
+                        self.warp(a, is_short))).into()
             }
             Opcode::STH => {
-                self.pop(ss, is_short).and_then(|a|
-                    self.push16(a, ds)).into()
+                self.pop(!is_return, is_short).and_then(|a|
+                    self.push16(a, is_return)).into()
             }
             Opcode::LDZ => {
-                self.pop8(ss).and_then(|a|
+                self.pop8(!is_return).and_then(|a|
                     self.peek(a as usize, is_short).and_then(|b|
-                        self.push(b, is_short))).into()
+                        self.push(b, !is_return, is_short))).into()
             }
             Opcode::STZ => {
-                self.pop8(ss).and_then(|a|
-                    self.pop(ss, is_short).and_then(|b|
-                        self.poke(a as usize, b))).into()
+                self.pop8(!is_return).and_then(|a|
+                    self.pop(!is_return, is_short).and_then(|b|
+                        self.poke(a as usize, b, is_short))).into()
             }
             Opcode::LDR => {
-                self.pop8(ss).and_then(|a|
-                    self.peek((a + pc) as usize, is_short).and_then(|b|
-                        self.push(b, is_short))).into()
+                self.pop8(!is_return).and_then(|a|
+                    self.peek((a + self.pc) as usize, is_short).and_then(|b|
+                        self.push(b, !is_return, is_short))).into()
             }
             Opcode::STR => {
-                self.pop8(ss).and_then(|a|
-                    self.pop(ss, is_short).and_then(|b|
-                        self.poke((a + pc) as usize, b))).into()
+                self.pop8(!is_return).and_then(|a|
+                    self.pop(!is_return, is_short).and_then(|b|
+                        self.poke((a + self.pc) as usize, b, is_short))).into()
             }
             Opcode::LDA => {
-                self.pop16(ss).and_then(|a|
+                self.pop16(!is_return).and_then(|a|
                     self.peek(a as usize, is_short).and_then(|b|
-                        self.push(b, is_short))).into()
+                        self.push(b, !is_return, is_short))).into()
             }
             Opcode::STA => {
-                self.pop16(ss).and_then(|a|
-                    self.pop(ss, is_short).and_then(|b|
-                        self.poke(a as usize, b))).into()
+                self.pop16(!is_return).and_then(|a|
+                    self.pop(!is_return, is_short).and_then(|b|
+                        self.poke(a as usize, b, is_short))).into()
             }
             Opcode::DEI => {
-                self.pop8(ss).and_then(|a| {
+                self.pop8(!is_return).and_then(|a| {
                     {
                         let device = ((a >> 4) & 0x0f) as usize;
                         let port = (a & 0x0F) as u8;
@@ -372,7 +400,7 @@ impl Uxn {
                             self.devices[device].dei(port)
                         }
                     }.and_then(|b|
-                        self.push(b as u16, is_short)
+                        self.push(b as u16, !is_return, is_short)
                     )
                 }).into()
             }
@@ -403,6 +431,7 @@ impl Uxn {
 fn main() {
     let mut uxn = Uxn {
         ram: [0; 65536],
+        pc: 0,
         wst: Stack {
             ptr: 0,
             data: [0; 256],
