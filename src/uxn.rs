@@ -85,6 +85,110 @@ trait Device {
     // fn deo2(&self, port: PortAddress, value: u16) -> Result<(), &str>;
 }
 
+struct VectorDevice {
+    x: u8,
+    y: u8,
+    width: u8,
+    height: u8,
+    color: u8
+}
+
+impl VectorDevice {
+    fn new() -> Self {
+        VectorDevice {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+            color: 0
+        }
+    }
+
+    // memory layout of vector device
+    // 0x00: draw (write 0x01 for RECT, 0x02 for CIRCLE)
+    // 0x01: x
+    // 0x02: y
+    // 0x03: width
+    // 0x04: height
+    // 0x05: color
+    fn draw_circle(&self) {
+        println!("draw circle at ({}, {}) with radius {} and color {}", self.x, self.y, self.width, self.color);
+    }
+
+    fn draw_rectangle(&self) {
+        println!("drawing rectangle at ({}, {}) with width {} and height {}", self.x, self.y, self.width, self.height);
+    }
+}
+impl Device for VectorDevice {
+    fn dei(&self, port: PortAddress) -> ExecutionResult<u8> {
+        return Err("device not implemented");
+    }
+
+    fn deo(&mut self, port: PortAddress, value: u8) -> ExecutionResult<()> {
+        match port {
+            0x00 => match value {
+                0x01 => self.draw_rectangle(),
+                0x02 => self.draw_circle(),
+                _ => return Err("invalid draw command")
+            },
+            0x01 => self.x = value,
+            0x02 => self.y = value,
+            0x03 => self.width = value,
+            0x04 => self.height = value,
+            0x05 => self.color = value,
+            _ => return Err("device not implemented"),
+        }
+        return Err("device not implemented");
+    }
+}
+
+
+struct BitmapDevice {
+    buffer: [u8; 256],
+    x: u8,
+    y: u8,
+    color: u8,
+}
+
+impl BitmapDevice {
+    fn new() -> Self {
+        BitmapDevice {
+            buffer: [0; 256],
+            x: 0,
+            y: 0,
+            color: 0
+        }
+    }
+
+    fn blit(&self) {
+        println!("blitting bitmap to screen");
+    }
+
+    fn draw_pixel(&mut self) {
+        self.buffer[self.y as usize * 16 + self.x as usize] = self.color;
+    }
+}
+
+impl Device for BitmapDevice {
+    fn dei(&self, port: PortAddress) -> ExecutionResult<u8> {
+        return Err("device not implemented");
+    }
+    fn deo(&mut self, port: PortAddress, value: u8) -> ExecutionResult<()> {
+        match port {
+            0x00 => match value {
+                0x00 => self.blit(),
+                0x01 => self.draw_pixel(),
+                _ => return Err("invalid draw command")
+            },
+            0x01 => self.x = value % 16,
+            0x02 => self.y = value % 16,
+            0x03 => self.color = value,
+            _ => return Err("device not implemented"),
+        }
+        return Err("device not implemented");
+    }
+}
+
 struct NullDevice {}
 
 impl Device for NullDevice {
@@ -141,7 +245,6 @@ impl Device for Uxn {
     }
 }
 
-
 impl Uxn {
     pub fn new() -> Self {
         Uxn {
@@ -158,9 +261,9 @@ impl Uxn {
                 data: [0; 256],
             },
             devices: [
-                Box::new(NullDevice {}),
-                Box::new(NullDevice {}),
-                Box::new(NullDevice {}),
+                Box::new(NullDevice {}), // reserved for the system device
+                Box::new(BitmapDevice::new()),
+                Box::new(VectorDevice::new()),
                 Box::new(NullDevice {}),
                 Box::new(NullDevice {}),
                 Box::new(NullDevice {}),
