@@ -107,5 +107,23 @@ pub fn ascii(input: &str) -> IResult<&str, &str> {
     )(input)
 }
 
+pub fn immediate(input: &str) -> IResult<&str, Instruction> {
+    map_res(nom::sequence::preceded(tag("#"), hexadecimal),
+            |v| -> Result<Instruction, &str> {
+                Ok(Instruction{
+                    opcode: Opcode::LIT,
+                    mode: if (v > 0xFF) {InstructionMode::Keep|InstructionMode::Short} else {InstructionMode::Keep},
+                    immediate: v
+                })
+            })(input)
+}
+
 #[test]
-fn parse_immediate() {}
+fn parse_immediate() {
+    assert_eq!(
+        immediate("#18"),
+        Ok(("", Instruction{opcode: Opcode::LIT, mode: InstructionMode::Keep, immediate: 0x18})));
+    assert_eq!(
+        immediate("#1818"),
+        Ok(("", Instruction{opcode: Opcode::LIT, mode: InstructionMode::Keep|InstructionMode::Short, immediate: 0x1818})));
+}
