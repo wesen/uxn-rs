@@ -10,10 +10,20 @@ use nom::sequence::{pair, preceded, tuple};
 use nom::{error, IResult, Parser};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Instruction {
-    opcode: Opcode,
-    mode: InstructionMode,
-    immediate: u16,
+pub enum Token {
+    Instruction {
+        opcode: Opcode,
+        mode: InstructionMode,
+        immediate: u16,
+    },
+    Label {
+        name: String,
+        type_: LabelType,
+    },
+    Address {
+        mode: AddressingMode,
+        address: u16,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -22,24 +32,12 @@ enum LabelType {
     Child,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Label {
-    name: String,
-    type_: LabelType,
-}
-
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum AddressingMode {
     LiteralRelative,
     LiteralZeroPage,
     RawAbsolute,
     LiteralAbsolute,
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Address {
-    mode: AddressingMode,
-    address: u16,
 }
 
 pub fn inline_comment<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, (), E> {
@@ -81,7 +79,7 @@ pub fn ascii_literal(input: &str) -> IResult<&str, &str> {
 }
 
 
-pub fn address(input: &str) -> IResult<&str, Address> {
+pub fn address(input: &str) -> IResult<&str, Token> {
     let (input, (mode, address)) = tuple((
         alt((
             value(AddressingMode::LiteralRelative, tag(",")),
@@ -91,10 +89,10 @@ pub fn address(input: &str) -> IResult<&str, Address> {
         )),
         hexadecimal,
     ))(input)?;
-    Ok((input, Address { mode, address }))
+    Ok((input, Token::Address { mode, address }))
 }
 
-pub fn label(input: &str) -> IResult<&str, Label> {
+pub fn label(input: &str) -> IResult<&str, Token> {
     let (input, (type_, name)) = tuple((
         alt((
             value(LabelType::Parent, tag("@")),
@@ -104,18 +102,18 @@ pub fn label(input: &str) -> IResult<&str, Label> {
     ))(input)?;
     Ok((
         input,
-        Label {
+        Token::Label {
             name: name.to_string(),
             type_,
         },
     ))
 }
 
-pub fn immediate(input: &str) -> IResult<&str, Instruction> {
-    map_res(
+pub fn immediate(input: &str) -> IResult<&str, Token> {
+    map(
         nom::sequence::preceded(tag("#"), hexadecimal),
-        |v| -> Result<Instruction, &str> {
-            Ok(Instruction {
+        |v| {
+            Token::Instruction {
                 opcode: Opcode::LIT,
                 mode: if v > 0xFF {
                     InstructionMode::Keep | InstructionMode::Short
@@ -123,7 +121,7 @@ pub fn immediate(input: &str) -> IResult<&str, Instruction> {
                     InstructionMode::Keep
                 },
                 immediate: v,
-            })
+            }
         },
     )(input)
 }
@@ -140,7 +138,7 @@ pub fn instruction_mode_flags(input: &str) -> IResult<&str, InstructionMode> {
     )(input)
 }
 
-pub fn instruction(input: &str) -> IResult<&str, Instruction> {
+pub fn instruction(input: &str) -> IResult<&str, Token> {
     let opcode_without_lit = map_res(recognize(count(one_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ"), 3)), |v: &str| -> Result<Opcode, &str> {
         if v.eq("LIT") {
             return Err("LIT needs to be parsed at a higher level");
@@ -150,12 +148,12 @@ pub fn instruction(input: &str) -> IResult<&str, Instruction> {
     let standard_instructions = map(pair(
         opcode_without_lit,
         instruction_mode_flags,
-    ), |(opcode, mode)| Instruction { opcode, mode, immediate: 0x00 });
+    ), |(opcode, mode)| Token::Instruction { opcode, mode, immediate: 0x00 });
 
     let lit = map(pair(
         preceded(tag("LIT"), instruction_mode_flags),
         preceded(multispace1, hexadecimal)),
-                  |(mode, immediate)| Instruction {
+                  |(mode, immediate)| Token::Instruction {
                       opcode: Opcode::LIT,
                       mode: mode | InstructionMode::Keep,
                       immediate,
@@ -197,7 +195,7 @@ fn parse_immediate() {
         immediate("#18"),
         Ok((
             "",
-            Instruction {
+            Token::Instruction {
                 opcode: Opcode::LIT,
                 mode: InstructionMode::Keep,
                 immediate: 0x18,
@@ -208,7 +206,7 @@ fn parse_immediate() {
         immediate("#1818"),
         Ok((
             "",
-            Instruction {
+            Token::Instruction {
                 opcode: Opcode::LIT,
                 mode: InstructionMode::Keep | InstructionMode::Short,
                 immediate: 0x1818,
@@ -223,7 +221,7 @@ fn parse_instruction() {
         instruction("DUP"),
         Ok((
             "",
-            Instruction {
+            Token::Instruction {
                 opcode: Opcode::DUP,
                 mode: InstructionMode::None,
                 immediate: 0x00,
@@ -235,7 +233,7 @@ fn parse_instruction() {
         instruction("DUP2"),
         Ok((
             "",
-            Instruction {
+            Token::Instruction {
                 opcode: Opcode::DUP,
                 mode: InstructionMode::Short,
                 immediate: 0x00,
@@ -247,7 +245,7 @@ fn parse_instruction() {
         instruction("DUP2r"),
         Ok((
             "",
-            Instruction {
+            Token::Instruction {
                 opcode: Opcode::DUP,
                 mode: InstructionMode::Short | InstructionMode::Return,
                 immediate: 0x00,
@@ -259,7 +257,7 @@ fn parse_instruction() {
         instruction("LIT 12"),
         Ok((
             "",
-            Instruction {
+            Token::Instruction {
                 opcode: Opcode::LIT,
                 mode: InstructionMode::Keep,
                 immediate: 0x12,
@@ -271,7 +269,7 @@ fn parse_instruction() {
         instruction("LIT2 1234"),
         Ok((
             "",
-            Instruction {
+            Token::Instruction {
                 opcode: Opcode::LIT,
                 mode: InstructionMode::Short | InstructionMode::Keep,
                 immediate: 0x1234,
@@ -283,7 +281,7 @@ fn parse_instruction() {
         instruction("LIT2r 1234"),
         Ok((
             "",
-            Instruction {
+            Token::Instruction {
                 opcode: Opcode::LIT,
                 mode: InstructionMode::Short | InstructionMode::Keep | InstructionMode::Return,
                 immediate: 0x1234,
