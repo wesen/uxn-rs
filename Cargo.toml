@@ -7,4 +7,6 @@ edition = "2021"
 
 [dependencies]
 bitmask-enum = "2.0.0"
+custom_derive = "0.1.7"
+enum_derive = "0.1.7"
 nom = "7"

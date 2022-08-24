@@ -35,8 +35,9 @@ pub enum InstructionMode {
     Short = 0x20,
 }
 
+custom_derive! {
 #[repr(u8)]
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, EnumFromStr)]
 pub enum Opcode {
     LIT = 0x00,
     INC = 0x01,
@@ -70,6 +71,7 @@ pub enum Opcode {
     ORA = 0x1d,
     EOR = 0x1e,
     SFT = 0x1f,
+}
 }
 
 impl From<u8> for Opcode {
@@ -141,7 +143,6 @@ impl Device for Uxn {
     }
 }
 
-
 impl Uxn {
     pub fn new() -> Self {
         Uxn {
@@ -173,7 +174,7 @@ impl Uxn {
                 Box::new(NullDevice {}),
                 Box::new(NullDevice {}),
                 Box::new(NullDevice {}),
-                Box::new(NullDevice {})
+                Box::new(NullDevice {}),
             ],
             is_halted: false,
         }
@@ -353,214 +354,227 @@ impl Uxn {
             }
 
             let res: Result<(), &str> = match opcode {
-                Opcode::LIT => {
-                    self.peek(self.pc as usize, mode)
-                        .and_then(|a|
-                            self.push(a, mode).and_then(|_| {
+                Opcode::LIT => self
+                    .peek(self.pc as usize, mode)
+                    .and_then(|a| {
+                        self.push(a, mode).and_then(|_| {
+                            self.pc += 1;
+                            if mode.contains(InstructionMode::Short) {
                                 self.pc += 1;
-                                if mode.contains(InstructionMode::Short) {
-                                    self.pc += 1;
-                                }
-                                Ok(())
-                            })).into()
-                }
-                Opcode::INC => {
-                    self.pop(mode).and_then(|a|
-                        self.push(a + 1, mode)).into()
-                }
-                Opcode::POP => {
-                    self.pop(mode).and_then(|_| Ok(()))
-                }
-                Opcode::NIP => {
-                    self.pop(mode).and_then(|a|
-                        self.pop(mode).and_then(|_|
-                            self.push(a, mode))).into()
-                }
-                Opcode::SWP => {
-                    self.pop(mode).and_then(|a|
-                        self.pop(mode).and_then(|b|
-                            self.push(a, mode).and_then(|_|
-                                self.push(b, mode)))).into()
-                }
-                Opcode::ROT => {
-                    self.pop(mode).and_then(|a|
-                        self.pop(mode).and_then(|b|
-                            self.pop(mode).and_then(|c|
-                                self.push(b, mode).and_then(|_|
-                                    self.push(a, mode)).and_then(|_|
-                                    self.push(c, mode))))).into()
-                }
-                Opcode::DUP => {
-                    self.pop(mode).and_then(|a|
-                        self.push(a, mode).and_then(|_|
-                            self.push(a, mode))).into()
-                }
-                Opcode::OVR => {
-                    self.pop(mode).and_then(|a|
-                        self.pop(mode).and_then(|b|
-                            self.push(b, mode).and_then(|_|
-                                self.push(a, mode).and_then(|_|
-                                    self.push(b, mode))))).into()
-                }
-                Opcode::EQU => {
-                    self.pop(mode).and_then(|a|
-                        self.pop(mode).and_then(|b|
-                            self.push8(if a == b { 1 } else { 0 }, mode))).into()
-                }
-                Opcode::NEQ => {
-                    self.pop(mode).and_then(|a|
-                        self.pop(mode).and_then(|b|
-                            self.push8(if a != b { 1 } else { 0 }, mode))).into()
-                }
-                Opcode::GTH => {
-                    self.pop(mode).and_then(|a|
-                        self.pop(mode).and_then(|b|
-                            self.push8(if b > a { 1 } else { 0 }, mode))).into()
-                }
-                Opcode::LTH => {
-                    self.pop(mode).and_then(|a|
-                        self.pop(mode).and_then(|b|
-                            self.push8(if b < a { 1 } else { 0 }, mode))).into()
-                }
-                Opcode::JMP => {
-                    self.pop(mode).and_then(|a|
-                        self.warp(a, mode)).into()
-                }
-                Opcode::JCN => {
-                    self.pop(mode).and_then(|a|
-                        self.pop8(mode).and_then(|b|
-                            if b != 0 { self.warp(a, mode) } else { Ok(()) })).into()
-                }
-                Opcode::JSR => {
-                    self.pop(mode).and_then(|a|
-                        self.push8(self.pc,
-                                   if mode.contains(InstructionMode::Return) {
-                                       InstructionMode::None
-                                   } else {
-                                       InstructionMode::Return
-                                   }).and_then(|_|
-                            self.warp(a, mode))).into()
-                }
-                Opcode::STH => {
-                    self.pop(mode).and_then(|a|
-                        self.push16(a,
-                                    if mode.contains(InstructionMode::Return) {
-                                        InstructionMode::None
-                                    } else {
-                                        InstructionMode::Return
-                                    })).into()
-                }
-                Opcode::LDZ => {
-                    self.pop8(mode).and_then(|a|
-                        self.peek(a as usize, mode).and_then(|b|
-                            self.push(b, mode))).into()
-                }
-                Opcode::STZ => {
-                    self.pop8(mode).and_then(|a|
-                        self.pop(mode).and_then(|b|
-                            self.poke(a as usize, b, mode))).into()
-                }
-                Opcode::LDR => {
-                    self.pop8(mode).and_then(|a|
-                        self.peek((a + self.pc) as usize, mode).and_then(|b|
-                            self.push(b, mode))).into()
-                }
-                Opcode::STR => {
-                    self.pop8(mode).and_then(|a|
-                        self.pop(mode).and_then(|b|
-                            self.poke((a + self.pc) as usize, b, mode))).into()
-                }
-                Opcode::LDA => {
-                    self.pop16(mode).and_then(|a|
-                        self.peek(a as usize, mode).and_then(|b|
-                            self.push(b, mode))).into()
-                }
-                Opcode::STA => {
-                    self.pop16(mode).and_then(|a|
-                        self.pop(mode).and_then(|b|
-                            self.poke(a as usize, b, mode))).into()
-                }
-                Opcode::DEI => {
-                    self.pop8(mode).and_then(|a| {
-                        {
-                            let device = ((a >> 4) & 0x0f) as usize;
-                            let port = (a & 0x0F) as u8;
-                            if device == 0 {
-                                // system device
-                                self.dei(port)
-                            } else {
-                                self.devices[device].dei(port)
                             }
-                        }.and_then(|b|
-                            self.push(b as u16, mode)
+                            Ok(())
+                        })
+                    })
+                    .into(),
+                Opcode::INC => self.pop(mode).and_then(|a| self.push(a + 1, mode)).into(),
+                Opcode::POP => self.pop(mode).and_then(|_| Ok(())),
+                Opcode::NIP => self
+                    .pop(mode)
+                    .and_then(|a| self.pop(mode).and_then(|_| self.push(a, mode)))
+                    .into(),
+                Opcode::SWP => self
+                    .pop(mode)
+                    .and_then(|a| {
+                        self.pop(mode)
+                            .and_then(|b| self.push(a, mode).and_then(|_| self.push(b, mode)))
+                    })
+                    .into(),
+                Opcode::ROT => self
+                    .pop(mode)
+                    .and_then(|a| {
+                        self.pop(mode).and_then(|b| {
+                            self.pop(mode).and_then(|c| {
+                                self.push(b, mode)
+                                    .and_then(|_| self.push(a, mode))
+                                    .and_then(|_| self.push(c, mode))
+                            })
+                        })
+                    })
+                    .into(),
+                Opcode::DUP => self
+                    .pop(mode)
+                    .and_then(|a| self.push(a, mode).and_then(|_| self.push(a, mode)))
+                    .into(),
+                Opcode::OVR => self
+                    .pop(mode)
+                    .and_then(|a| {
+                        self.pop(mode).and_then(|b| {
+                            self.push(b, mode)
+                                .and_then(|_| self.push(a, mode).and_then(|_| self.push(b, mode)))
+                        })
+                    })
+                    .into(),
+                Opcode::EQU => self
+                    .pop(mode)
+                    .and_then(|a| {
+                        self.pop(mode)
+                            .and_then(|b| self.push8(if a == b { 1 } else { 0 }, mode))
+                    })
+                    .into(),
+                Opcode::NEQ => self
+                    .pop(mode)
+                    .and_then(|a| {
+                        self.pop(mode)
+                            .and_then(|b| self.push8(if a != b { 1 } else { 0 }, mode))
+                    })
+                    .into(),
+                Opcode::GTH => self
+                    .pop(mode)
+                    .and_then(|a| {
+                        self.pop(mode)
+                            .and_then(|b| self.push8(if b > a { 1 } else { 0 }, mode))
+                    })
+                    .into(),
+                Opcode::LTH => self
+                    .pop(mode)
+                    .and_then(|a| {
+                        self.pop(mode)
+                            .and_then(|b| self.push8(if b < a { 1 } else { 0 }, mode))
+                    })
+                    .into(),
+                Opcode::JMP => self.pop(mode).and_then(|a| self.warp(a, mode)).into(),
+                Opcode::JCN => self
+                    .pop(mode)
+                    .and_then(|a| {
+                        self.pop8(mode)
+                            .and_then(|b| if b != 0 { self.warp(a, mode) } else { Ok(()) })
+                    })
+                    .into(),
+                Opcode::JSR => self
+                    .pop(mode)
+                    .and_then(|a| {
+                        self.push8(
+                            self.pc,
+                            if mode.contains(InstructionMode::Return) {
+                                InstructionMode::None
+                            } else {
+                                InstructionMode::Return
+                            },
                         )
-                    }).into()
+                        .and_then(|_| self.warp(a, mode))
+                    })
+                    .into(),
+                Opcode::STH => self
+                    .pop(mode)
+                    .and_then(|a| {
+                        self.push16(
+                            a,
+                            if mode.contains(InstructionMode::Return) {
+                                InstructionMode::None
+                            } else {
+                                InstructionMode::Return
+                            },
+                        )
+                    })
+                    .into(),
+                Opcode::LDZ => self
+                    .pop8(mode)
+                    .and_then(|a| self.peek(a as usize, mode).and_then(|b| self.push(b, mode)))
+                    .into(),
+                Opcode::STZ => self
+                    .pop8(mode)
+                    .and_then(|a| self.pop(mode).and_then(|b| self.poke(a as usize, b, mode)))
+                    .into(),
+                Opcode::LDR => self
+                    .pop8(mode)
+                    .and_then(|a| {
+                        self.peek((a + self.pc) as usize, mode)
+                            .and_then(|b| self.push(b, mode))
+                    })
+                    .into(),
+                Opcode::STR => self
+                    .pop8(mode)
+                    .and_then(|a| {
+                        self.pop(mode)
+                            .and_then(|b| self.poke((a + self.pc) as usize, b, mode))
+                    })
+                    .into(),
+                Opcode::LDA => self
+                    .pop16(mode)
+                    .and_then(|a| self.peek(a as usize, mode).and_then(|b| self.push(b, mode)))
+                    .into(),
+                Opcode::STA => self
+                    .pop16(mode)
+                    .and_then(|a| self.pop(mode).and_then(|b| self.poke(a as usize, b, mode)))
+                    .into(),
+                Opcode::DEI => {
+                    self.pop8(mode)
+                        .and_then(|a| {
+                            {
+                                let device = ((a >> 4) & 0x0f) as usize;
+                                let port = (a & 0x0F) as u8;
+                                if device == 0 {
+                                    // system device
+                                    self.dei(port)
+                                } else {
+                                    self.devices[device].dei(port)
+                                }
+                            }
+                            .and_then(|b| self.push(b as u16, mode))
+                        })
+                        .into()
                 }
                 Opcode::DEO => {
-                    self.pop8(mode).and_then(|a| {
-                        self.pop(mode).and_then(|value| {
-                            let device = ((a >> 4) & 0x0f) as usize;
-                            let port = (a & 0x0F) as u8;
-                            if device == 0 {
-                                // system device
-                                self.deo(port, a as u8)
-                            } else {
-                                self.devices[device].deo(port, value as u8)
-                            }
+                    self.pop8(mode)
+                        .and_then(|a| {
+                            self.pop(mode).and_then(|value| {
+                                let device = ((a >> 4) & 0x0f) as usize;
+                                let port = (a & 0x0F) as u8;
+                                if device == 0 {
+                                    // system device
+                                    self.deo(port, a as u8)
+                                } else {
+                                    self.devices[device].deo(port, value as u8)
+                                }
+                            })
                         })
-                    }).into()
+                        .into()
                 }
-                Opcode::ADD => {
-                    self.pop(mode).and_then(|a|
-                        self.pop(mode).and_then(|b|
-                            self.push(a + b, mode))).into()
-                }
-                Opcode::SUB => {
-                    self.pop(mode).and_then(|a|
-                        self.pop(mode).and_then(|b|
-                            self.push(b - a, mode))).into()
-                }
-                Opcode::MUL => {
-                    self.pop(mode).and_then(|a|
-                        self.pop(mode).and_then(|b|
-                            self.push(a * b, mode))).into()
-                }
-                Opcode::DIV => {
-                    self.pop(mode).and_then(|a|
-                        self.pop(mode).and_then(|b| {
-                            if a == 0 {
-                                Err("Division by zero")
-                            } else {
-                                self.push(b / a, mode)
-                            }
-                        }))
-                }
-                Opcode::AND => {
-                    self.pop(mode).and_then(|a|
-                        self.pop(mode).and_then(|b|
-                            self.push(a & b, mode))).into()
-                }
-                Opcode::ORA => {
-                    self.pop(mode).and_then(|a|
-                        self.pop(mode).and_then(|b|
-                            self.push(a | b, mode))).into()
-                }
-                Opcode::EOR => {
-                    self.pop(mode).and_then(|a|
-                        self.pop(mode).and_then(|b|
-                            self.push(a ^ b, mode))).into()
-                }
-                Opcode::SFT => {
-                    self.pop(mode).and_then(|a|
-                        self.pop8(mode).and_then(|b|
-                            self.push(a << ((b & 0xF0) >> 4) >> (b & 0x0F), mode))).into()
-                }
+                Opcode::ADD => self
+                    .pop(mode)
+                    .and_then(|a| self.pop(mode).and_then(|b| self.push(a + b, mode)))
+                    .into(),
+                Opcode::SUB => self
+                    .pop(mode)
+                    .and_then(|a| self.pop(mode).and_then(|b| self.push(b - a, mode)))
+                    .into(),
+                Opcode::MUL => self
+                    .pop(mode)
+                    .and_then(|a| self.pop(mode).and_then(|b| self.push(a * b, mode)))
+                    .into(),
+                Opcode::DIV => self.pop(mode).and_then(|a| {
+                    self.pop(mode).and_then(|b| {
+                        if a == 0 {
+                            Err("Division by zero")
+                        } else {
+                            self.push(b / a, mode)
+                        }
+                    })
+                }),
+                Opcode::AND => self
+                    .pop(mode)
+                    .and_then(|a| self.pop(mode).and_then(|b| self.push(a & b, mode)))
+                    .into(),
+                Opcode::ORA => self
+                    .pop(mode)
+                    .and_then(|a| self.pop(mode).and_then(|b| self.push(a | b, mode)))
+                    .into(),
+                Opcode::EOR => self
+                    .pop(mode)
+                    .and_then(|a| self.pop(mode).and_then(|b| self.push(a ^ b, mode)))
+                    .into(),
+                Opcode::SFT => self
+                    .pop(mode)
+                    .and_then(|a| {
+                        self.pop8(mode)
+                            .and_then(|b| self.push(a << ((b & 0xF0) >> 4) >> (b & 0x0F), mode))
+                    })
+                    .into(),
             };
             if res.is_err() {
                 return res;
             }
         }
-
 
         Ok(())
     }
