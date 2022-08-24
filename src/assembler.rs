@@ -1,8 +1,9 @@
+use enum_derive::ParseEnumError;
 use crate::uxn::{InstructionMode, Opcode};
 use nom::branch::{alt, permutation};
 use nom::bytes::complete::{tag, take_until};
 use nom::character::complete::{alpha1, alphanumeric1, char, multispace1, none_of, one_of};
-use nom::combinator::{map_res, not, opt, recognize, value};
+use nom::combinator::{map, map_res, not, opt, recognize, value};
 use nom::error::{ErrorKind, ParseError};
 use nom::multi::{count, many0_count, many1, many_till};
 use nom::sequence::{pair, tuple};
@@ -127,7 +128,12 @@ pub fn either_or<I: Clone, O: Clone, O2, E: ParseError<I>, F>(success_value: O, 
 pub fn instruction(input: &str) -> IResult<&str, Instruction> {
     // Err(nom::Err::Error(ParseError::from_char(input, 'a')))
     let opcode_parser = count(one_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ"), 3);
-    let first = recognize(opcode_parser);
+    let first = map_res(recognize(opcode_parser), |v: &str| -> Result<Opcode, &str> {
+        if v.eq("LIT") {
+            return Err("LIT needs to be parsed at a higher level");
+        }
+        v.parse().or(Err("Could not parse opcode"))
+    });
     let second = permutation(
         (
             either_or(InstructionMode::Short, InstructionMode::None, char('2')),
@@ -135,13 +141,14 @@ pub fn instruction(input: &str) -> IResult<&str, Instruction> {
             either_or(InstructionMode::Return, InstructionMode::None, char('r')),
         )
     );
-    let res: IResult<&str, (&str, (InstructionMode, InstructionMode, InstructionMode))> = pair(
+    let third = map(second,
+                        |(v1, v2, v3): (InstructionMode, InstructionMode, InstructionMode)| v1 | v2 | v3,
+    );
+    let res: IResult<&str, Instruction> = map(pair(
         first,
-        second,
-    )
-        (input);
-    println!("{:?}", res.unwrap());
-    Err(nom::Err::Incomplete(nom::Needed::Unknown))
+        third,
+    ), |(opcode, mode)| Instruction { opcode, mode, immediate: 0x00, })(input);
+    res
 }
 
 #[test]
@@ -208,5 +215,29 @@ fn parse_instruction() {
                 immediate: 0x00,
             }
         ))
-    )
+    );
+
+    assert_eq!(
+        instruction("DUP2"),
+        Ok((
+            "",
+            Instruction {
+                opcode: Opcode::DUP,
+                mode: InstructionMode::Short,
+                immediate: 0x00,
+            }
+        ))
+    );
+
+    assert_eq!(
+        instruction("DUP2r"),
+        Ok((
+            "",
+            Instruction {
+                opcode: Opcode::DUP,
+                mode: InstructionMode::Short | InstructionMode::Return,
+                immediate: 0x00,
+            }
+        ))
+    );
 }
