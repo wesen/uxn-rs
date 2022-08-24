@@ -6,7 +6,7 @@ use nom::character::complete::{alpha1, alphanumeric1, char, multispace1, none_of
 use nom::combinator::{map, map_res, not, opt, recognize, value};
 use nom::error::{ErrorKind, ParseError};
 use nom::multi::{count, many0_count, many1, many_till};
-use nom::sequence::{pair, tuple};
+use nom::sequence::{pair, preceded, tuple};
 use nom::{error, IResult, Parser};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -61,6 +61,26 @@ pub fn identifier(input: &str) -> IResult<&str, &str> {
     ))(input)
 }
 
+/// Either Or Parser: Will return `success_value` if `f` is successful, `fail_value` if not.
+pub fn either_or<I: Clone, O: Clone, O2, E: ParseError<I>, F>(success_value: O, fail_value: O, mut f: F)
+                                                              -> impl FnMut(I) -> IResult<I, O, E>
+    where F: Parser<I, O2, E>,
+{
+    move |input: I| {
+        f.parse(input.clone()).map_or(
+            Ok((input, fail_value.clone())),
+            |(i, _)| Ok((i, success_value.clone())),
+        )
+    }
+}
+
+// actual uxntal elements
+
+pub fn ascii_literal(input: &str) -> IResult<&str, &str> {
+    recognize(pair(tag("\""), many1(not(multispace1))))(input)
+}
+
+
 pub fn address(input: &str) -> IResult<&str, Address> {
     let (input, (mode, address)) = tuple((
         alt((
@@ -91,10 +111,6 @@ pub fn label(input: &str) -> IResult<&str, Label> {
     ))
 }
 
-pub fn ascii(input: &str) -> IResult<&str, &str> {
-    recognize(pair(tag("\""), many1(not(multispace1))))(input)
-}
-
 pub fn immediate(input: &str) -> IResult<&str, Instruction> {
     map_res(
         nom::sequence::preceded(tag("#"), hexadecimal),
@@ -112,43 +128,41 @@ pub fn immediate(input: &str) -> IResult<&str, Instruction> {
     )(input)
 }
 
-/// Either Or Parser: Will return `success_value` if `f` is successful, `fail_value` if not.
-pub fn either_or<I: Clone, O: Clone, O2, E: ParseError<I>, F>(success_value: O, fail_value: O, mut f: F)
-                                                              -> impl FnMut(I) -> IResult<I, O, E>
-    where F: Parser<I, O2, E>,
-{
-    move |input: I| {
-        f.parse(input.clone()).map_or(
-            Ok((input, fail_value.clone())),
-            |(i, _)| Ok((i, success_value.clone())),
-        )
-    }
-}
-
-pub fn instruction(input: &str) -> IResult<&str, Instruction> {
-    // Err(nom::Err::Error(ParseError::from_char(input, 'a')))
-    let opcode_parser = count(one_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ"), 3);
-    let first = map_res(recognize(opcode_parser), |v: &str| -> Result<Opcode, &str> {
-        if v.eq("LIT") {
-            return Err("LIT needs to be parsed at a higher level");
-        }
-        v.parse().or(Err("Could not parse opcode"))
-    });
-    let second = permutation(
+pub fn instruction_mode_flags(input: &str) -> IResult<&str, InstructionMode> {
+    map(permutation(
         (
             either_or(InstructionMode::Short, InstructionMode::None, char('2')),
             either_or(InstructionMode::Keep, InstructionMode::None, char('k')),
             either_or(InstructionMode::Return, InstructionMode::None, char('r')),
         )
-    );
-    let third = map(second,
-                        |(v1, v2, v3): (InstructionMode, InstructionMode, InstructionMode)| v1 | v2 | v3,
-    );
-    let res: IResult<&str, Instruction> = map(pair(
-        first,
-        third,
-    ), |(opcode, mode)| Instruction { opcode, mode, immediate: 0x00, })(input);
-    res
+    ),
+        |(v1, v2, v3): (InstructionMode, InstructionMode, InstructionMode)| v1 | v2 | v3,
+    )(input)
+}
+
+pub fn instruction(input: &str) -> IResult<&str, Instruction> {
+    let opcode_without_lit = map_res(recognize(count(one_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ"), 3)), |v: &str| -> Result<Opcode, &str> {
+        if v.eq("LIT") {
+            return Err("LIT needs to be parsed at a higher level");
+        }
+        v.parse().or(Err("Could not parse opcode"))
+    });
+    let standard_instructions = map(pair(
+        opcode_without_lit,
+        instruction_mode_flags,
+    ), |(opcode, mode)| Instruction { opcode, mode, immediate: 0x00 });
+
+    let lit = map(pair(
+        preceded(tag("LIT"), instruction_mode_flags),
+        preceded(multispace1, hexadecimal)),
+                  |(mode, immediate)| Instruction {
+                      opcode: Opcode::LIT,
+                      mode,
+                      immediate,
+                  });
+    alt((
+        standard_instructions,
+        lit))(input)
 }
 
 #[test]
@@ -237,6 +251,42 @@ fn parse_instruction() {
                 opcode: Opcode::DUP,
                 mode: InstructionMode::Short | InstructionMode::Return,
                 immediate: 0x00,
+            }
+        ))
+    );
+
+    assert_eq!(
+        instruction("LIT 12"),
+        Ok((
+            "",
+            Instruction {
+                opcode: Opcode::LIT,
+                mode: InstructionMode::None,
+                immediate: 0x12,
+            }
+        ))
+    );
+
+    assert_eq!(
+        instruction("LIT2 1234"),
+        Ok((
+            "",
+            Instruction {
+                opcode: Opcode::LIT,
+                mode: InstructionMode::Short,
+                immediate: 0x1234,
+            }
+        ))
+    );
+
+    assert_eq!(
+        instruction("LIT2r 1234"),
+        Ok((
+            "",
+            Instruction {
+                opcode: Opcode::LIT,
+                mode: InstructionMode::Short | InstructionMode::Return,
+                immediate: 0x1234,
             }
         ))
     );
