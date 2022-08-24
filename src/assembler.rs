@@ -157,7 +157,7 @@ pub fn instruction(input: &str) -> IResult<&str, Instruction> {
         preceded(multispace1, hexadecimal)),
                   |(mode, immediate)| Instruction {
                       opcode: Opcode::LIT,
-                      mode,
+                      mode: mode | InstructionMode::Keep,
                       immediate,
                   });
     alt((
@@ -261,7 +261,7 @@ fn parse_instruction() {
             "",
             Instruction {
                 opcode: Opcode::LIT,
-                mode: InstructionMode::None,
+                mode: InstructionMode::Keep,
                 immediate: 0x12,
             }
         ))
@@ -273,7 +273,7 @@ fn parse_instruction() {
             "",
             Instruction {
                 opcode: Opcode::LIT,
-                mode: InstructionMode::Short,
+                mode: InstructionMode::Short | InstructionMode::Keep,
                 immediate: 0x1234,
             }
         ))
@@ -285,7 +285,7 @@ fn parse_instruction() {
             "",
             Instruction {
                 opcode: Opcode::LIT,
-                mode: InstructionMode::Short | InstructionMode::Return,
+                mode: InstructionMode::Short | InstructionMode::Keep | InstructionMode::Return,
                 immediate: 0x1234,
             }
         ))
